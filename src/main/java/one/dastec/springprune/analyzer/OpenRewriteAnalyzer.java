@@ -121,9 +121,27 @@ public class OpenRewriteAnalyzer {
     }
 
     private static List<String> extractDeclaredDependencies(Xml.Document pomDocument) {
-        // Simple placeholder array matching coordinates.
-        // In a complete build, OpenRewrite resolves transitives via Maven resolution markers.
-        return new ArrayList<>();
+        List<String> declaredDependencies = new ArrayList<>();
+        Xml.Tag root = pomDocument.getRoot();
+        
+        // Find <dependencies> tag
+        Optional<Xml.Tag> dependenciesTag = root.getChild("dependencies");
+        if (dependenciesTag.isPresent()) {
+            for (Xml.Tag depTag : dependenciesTag.get().getChildren("dependency")) {
+                Optional<Xml.Tag> groupIdTag = depTag.getChild("groupId");
+                Optional<Xml.Tag> artifactIdTag = depTag.getChild("artifactId");
+                
+                if (groupIdTag.isPresent() && artifactIdTag.isPresent()) {
+                    String groupId = groupIdTag.get().getValue().orElse("").trim();
+                    String artifactId = artifactIdTag.get().getValue().orElse("").trim();
+                    if (!groupId.isEmpty() && !artifactId.isEmpty()) {
+                        declaredDependencies.add(groupId + ":" + artifactId);
+                    }
+                }
+            }
+        }
+        
+        return declaredDependencies;
     }
 
     private static Set<String> scanJavaImports(Path projectPath) throws IOException {
