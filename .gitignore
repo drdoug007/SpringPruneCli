@@ -44,3 +44,4 @@ src/main/frontend/dist/
 .test_output.txt
 *.mv.db
 *.trace.db
+/dependency-reduced-pom.xml
