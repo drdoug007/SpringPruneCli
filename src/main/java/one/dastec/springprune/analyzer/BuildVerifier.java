@@ -24,7 +24,8 @@ public class BuildVerifier {
             backupPaths.add(backupPath);
         } catch (IOException e) {
             // Using standard error for critical backup failures
-            System.err.println("⚠️ Warning: Failed to create pom.xml backup: " + e.getMessage());
+            String msg = e.getMessage();
+            System.err.println("⚠️ Warning: Failed to create pom.xml backup: " + (msg != null ? msg : e.getClass().getName()));
         }
     }
 
@@ -92,7 +93,8 @@ public class BuildVerifier {
             }
             return process.waitFor() == 0;
         } catch (IOException | InterruptedException e) {
-            if (err != null) err.println("❌ Error executing Maven goals " + String.join(" ", goals) + ": " + e.getMessage());
+            String msg = e.getMessage();
+            if (err != null) err.println("❌ Error executing Maven goals " + String.join(" ", goals) + ": " + (msg != null ? msg : e.getClass().getName()));
             return false;
         }
     }
@@ -112,7 +114,8 @@ public class BuildVerifier {
             try {
                 Files.move(backupPath, pomPath, StandardCopyOption.REPLACE_EXISTING);
             } catch (IOException e) {
-                System.err.println("❌ Critical: Failed to restore pom.xml from backup " + backupPath + ": " + e.getMessage());
+                String msg = e.getMessage();
+                System.err.println("❌ Critical: Failed to restore pom.xml from backup " + backupPath + ": " + (msg != null ? msg : e.getClass().getName()));
             }
         }
         System.out.println("🔄 Rollback successful. All pom.xml files have been restored to their original state.");

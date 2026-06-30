@@ -82,7 +82,8 @@ public class SpringAnnotationScanner {
                         } catch (IOException ignored) {}
                     });
         } catch (IOException e) {
-            System.err.println("⚠️ Warning: Failed to scan annotations in " + srcPath + ": " + e.getMessage());
+            String msg = e.getMessage();
+            System.err.println("⚠️ Warning: Failed to scan annotations in " + srcPath + ": " + (msg != null ? msg : e.getClass().getName()));
         }
 
         return protectedDeps;

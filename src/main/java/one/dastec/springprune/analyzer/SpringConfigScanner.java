@@ -42,7 +42,8 @@ public class SpringConfigScanner {
                         }
                     });
         } catch (IOException e) {
-            System.err.println("⚠️ Warning: Failed to scan resources directory: " + e.getMessage());
+            String msg = e.getMessage();
+            System.err.println("⚠️ Warning: Failed to scan resources directory: " + (msg != null ? msg : e.getClass().getName()));
         }
 
         return safeList;
@@ -59,7 +60,8 @@ public class SpringConfigScanner {
             evaluateUrl(datasourceUrl, safeList);
             evaluateUrl(r2dbcUrl, safeList);
         } catch (IOException e) {
-            System.err.println("⚠️ Warning: Failed to read properties file " + filePath.getFileName() + ": " + e.getMessage());
+            String msg = e.getMessage();
+            System.err.println("⚠️ Warning: Failed to read properties file " + filePath.getFileName() + ": " + (msg != null ? msg : e.getClass().getName()));
         }
     }
 
@@ -77,7 +79,8 @@ public class SpringConfigScanner {
                 }
             }
         } catch (IOException e) {
-            System.err.println("⚠️ Warning: Failed to read YAML file " + filePath.getFileName() + ": " + e.getMessage());
+            String msg = e.getMessage();
+            System.err.println("⚠️ Warning: Failed to read YAML file " + filePath.getFileName() + ": " + (msg != null ? msg : e.getClass().getName()));
         }
     }
 

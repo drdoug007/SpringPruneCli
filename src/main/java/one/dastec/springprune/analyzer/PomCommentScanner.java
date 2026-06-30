@@ -54,7 +54,8 @@ public class PomCommentScanner {
                 }
             }
         } catch (Exception e) {
-            System.err.println("⚠️ Warning: Failed to parse pom.xml for comments: " + e.getMessage());
+            String msg = e.getMessage();
+            System.err.println("⚠️ Warning: Failed to parse pom.xml for comments: " + (msg != null ? msg : e.getClass().getName()));
         }
 
         return keptDependencies;

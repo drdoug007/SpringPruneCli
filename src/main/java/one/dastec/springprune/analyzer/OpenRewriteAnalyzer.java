@@ -39,7 +39,13 @@ public class OpenRewriteAnalyzer {
     public static Map<String, DepReport> findUnusedDetailed(Path projectPath, Set<String> protectedDependencies) {
         Map<String, DepReport> reportMap = new HashMap<>();
         Path pomPath = projectPath.resolve("pom.xml");
-        ExecutionContext ctx = new InMemoryExecutionContext(t -> System.err.println("OpenRewrite Log: " + t.getMessage()));
+        ExecutionContext ctx = new InMemoryExecutionContext(t -> {
+            String msg = t.getMessage();
+            System.err.println("OpenRewrite Log: " + (msg != null ? msg : t.getClass().getName()));
+            if (msg == null || "null".equals(msg)) {
+                t.printStackTrace(System.err);
+            }
+        });
 
         try {
             MavenParser mavenParser = MavenParser.builder().build();
@@ -104,7 +110,11 @@ public class OpenRewriteAnalyzer {
                 reportMap.put(report.getKey(), report);
             }
         } catch (Exception e) {
-            System.err.println("⚠️ Warning: Analysis failed: " + e.getMessage());
+            String msg = e.getMessage();
+            System.err.println("⚠️ Warning: Analysis failed: " + (msg != null ? msg : e.getClass().getName()));
+            if (msg == null || "null".equals(msg)) {
+                e.printStackTrace(System.err);
+            }
         }
         return reportMap;
     }
@@ -228,7 +238,13 @@ public class OpenRewriteAnalyzer {
 
     public static void applyExclusions(Path projectPath, Collection<DepReport> reports, boolean commentOnly) {
         Path pomPath = projectPath.resolve("pom.xml");
-        ExecutionContext ctx = new InMemoryExecutionContext();
+        ExecutionContext ctx = new InMemoryExecutionContext(t -> {
+            String msg = t.getMessage();
+            System.err.println("OpenRewrite Modification Log: " + (msg != null ? msg : t.getClass().getName()));
+            if (msg == null || "null".equals(msg)) {
+                t.printStackTrace(System.err);
+            }
+        });
 
         try {
             MavenParser mavenParser = MavenParser.builder().build();
@@ -282,7 +298,11 @@ public class OpenRewriteAnalyzer {
             }
 
         } catch (Exception e) {
-            System.err.println("⚠️ Warning: Failed to apply modifications via OpenRewrite: " + e.getMessage());
+            String msg = e.getMessage();
+            System.err.println("⚠️ Warning: Failed to apply modifications via OpenRewrite: " + (msg != null ? msg : e.getClass().getName()));
+            if (msg == null || "null".equals(msg)) {
+                e.printStackTrace(System.err);
+            }
         }
     }
 
