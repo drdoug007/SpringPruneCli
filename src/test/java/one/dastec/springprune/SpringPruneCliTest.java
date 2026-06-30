@@ -86,6 +86,52 @@ public class SpringPruneCliTest {
     }
 
     @Test
+    void test_shouldAcceptCustomSettingsOption(@TempDir Path tempProjectDir) throws IOException {
+        // Given a project and a custom settings.xml
+        Path pomPath = tempProjectDir.resolve("pom.xml");
+        Files.writeString(pomPath, """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>test-app</artifactId>
+                    <version>1.0</version>
+                </project>
+                """);
+
+        Path settingsPath = tempProjectDir.resolve("custom-settings.xml");
+        Files.writeString(settingsPath, "<settings></settings>");
+
+        // When executing with the --settings option
+        String[] args = {
+                "--path", tempProjectDir.toAbsolutePath().toString(),
+                "--settings", settingsPath.toAbsolutePath().toString(),
+                "--dry-run"
+        };
+        int exitCode = cmd.execute(args);
+
+        // Then it should execute successfully
+        assertEquals(0, exitCode);
+        assertTrue(outWriter.toString().contains("Starting safe dependency analyzer"), "Should start analysis even with custom settings");
+    }
+
+    @Test
+    void test_shouldFailWhenSettingsPathDoesNotExist(@TempDir Path tempProjectDir) {
+        // Given an invalid settings path
+        String[] args = {
+                "--path", tempProjectDir.toAbsolutePath().toString(),
+                "--settings", "/non/existent/settings.xml"
+        };
+
+        // When executing the CLI
+        int exitCode = cmd.execute(args);
+
+        // Then it should return error code 1
+        assertEquals(1, exitCode);
+        assertTrue(errWriter.toString().contains("Provided settings path does not exist"), "Should show error for missing settings file");
+    }
+
+    @Test
     void test_shouldBackupPomFileBeforeModification(@TempDir Path tempProjectDir) throws IOException {
         // Given a mock project structure
         Path pomPath = tempProjectDir.resolve("pom.xml");
@@ -457,7 +503,7 @@ public class SpringPruneCliTest {
         );
 
         // When applying exclusions
-        one.dastec.springprune.analyzer.OpenRewriteAnalyzer.applyExclusions(tempProjectDir, java.util.Collections.singleton(transitiveReport), false);
+        one.dastec.springprune.analyzer.OpenRewriteAnalyzer.applyExclusions(tempProjectDir, java.util.Collections.singleton(transitiveReport), false, null);
 
         // Then the pom.xml should contain an <exclusion>
         String updatedPom = Files.readString(pomPath);
@@ -762,7 +808,7 @@ public class SpringPruneCliTest {
         );
 
         // When applying exclusions with commentOnly = true
-        one.dastec.springprune.analyzer.OpenRewriteAnalyzer.applyExclusions(tempProjectDir, java.util.Collections.singleton(report), true);
+        one.dastec.springprune.analyzer.OpenRewriteAnalyzer.applyExclusions(tempProjectDir, java.util.Collections.singleton(report), true, null);
 
         // Then the dependency should be commented out in the POM
         String updatedPom = Files.readString(pomPath);
@@ -799,7 +845,7 @@ public class SpringPruneCliTest {
         );
 
         // When applying exclusions with commentOnly = true
-        one.dastec.springprune.analyzer.OpenRewriteAnalyzer.applyExclusions(tempProjectDir, java.util.Collections.singleton(transitiveReport), true);
+        one.dastec.springprune.analyzer.OpenRewriteAnalyzer.applyExclusions(tempProjectDir, java.util.Collections.singleton(transitiveReport), true, null);
 
         // Then the exclusion should be added but commented out
         String updatedPom = Files.readString(pomPath);

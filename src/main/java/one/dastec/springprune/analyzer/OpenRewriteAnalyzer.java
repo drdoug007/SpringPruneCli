@@ -5,7 +5,9 @@ import org.openrewrite.InMemoryExecutionContext;
 import org.openrewrite.SourceFile;
 import org.openrewrite.java.tree.J;
 import org.openrewrite.maven.ExcludeDependency;
+import org.openrewrite.maven.MavenExecutionContextView;
 import org.openrewrite.maven.MavenParser;
+import org.openrewrite.maven.MavenSettings;
 import org.openrewrite.maven.RemoveDependency;
 import org.openrewrite.maven.tree.MavenResolutionResult;
 import org.openrewrite.maven.tree.ResolvedDependency;
@@ -36,7 +38,7 @@ public class OpenRewriteAnalyzer {
         public String getKey() { return groupId + ":" + artifactId; }
     }
 
-    public static Map<String, DepReport> findUnusedDetailed(Path projectPath, Set<String> protectedDependencies) {
+    public static Map<String, DepReport> findUnusedDetailed(Path projectPath, Set<String> protectedDependencies, Path settingsPath) {
         Map<String, DepReport> reportMap = new HashMap<>();
         Path pomPath = projectPath.resolve("pom.xml");
         ExecutionContext ctx = new InMemoryExecutionContext(t -> {
@@ -46,6 +48,10 @@ public class OpenRewriteAnalyzer {
                 t.printStackTrace(System.err);
             }
         });
+
+        if (settingsPath != null && Files.exists(settingsPath)) {
+            MavenExecutionContextView.view(ctx).setMavenSettings(MavenSettings.parse(settingsPath, ctx));
+        }
 
         try {
             MavenParser mavenParser = MavenParser.builder().build();
@@ -236,7 +242,7 @@ public class OpenRewriteAnalyzer {
         return false;
     }
 
-    public static void applyExclusions(Path projectPath, Collection<DepReport> reports, boolean commentOnly) {
+    public static void applyExclusions(Path projectPath, Collection<DepReport> reports, boolean commentOnly, Path settingsPath) {
         Path pomPath = projectPath.resolve("pom.xml");
         ExecutionContext ctx = new InMemoryExecutionContext(t -> {
             String msg = t.getMessage();
@@ -245,6 +251,10 @@ public class OpenRewriteAnalyzer {
                 t.printStackTrace(System.err);
             }
         });
+
+        if (settingsPath != null && Files.exists(settingsPath)) {
+            MavenExecutionContextView.view(ctx).setMavenSettings(MavenSettings.parse(settingsPath, ctx));
+        }
 
         try {
             MavenParser mavenParser = MavenParser.builder().build();

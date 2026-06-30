@@ -36,6 +36,9 @@ public class SpringPruneCli implements Callable<Integer> {
     @Option(names = {"-c", "--comment"}, description = "Comment out unused dependencies instead of removing them.")
     private boolean comment = false;
 
+    @Option(names = {"-s", "--settings"}, description = "Optional path to a custom Maven settings.xml file.")
+    private Path settingsPath;
+
     @Spec
     private CommandSpec spec;
 
@@ -46,6 +49,11 @@ public class SpringPruneCli implements Callable<Integer> {
 
         if (!Files.exists(projectPath) || !Files.isDirectory(projectPath)) {
             err.println("❌ Error: Provided path does not exist or is not a directory.");
+            return 1;
+        }
+
+        if (settingsPath != null && (!Files.exists(settingsPath) || !Files.isRegularFile(settingsPath))) {
+            err.println("❌ Error: Provided settings path does not exist or is not a file: " + settingsPath);
             return 1;
         }
 
@@ -80,7 +88,7 @@ public class SpringPruneCli implements Callable<Integer> {
 
             // Phase 3: Run static code import parsing
             out.println("🤖 Phase 3: Commencing OpenRewrite Deep Tree Analysis...");
-            Map<String, OpenRewriteAnalyzer.DepReport> detailedCandidates = OpenRewriteAnalyzer.findUnusedDetailed(module, protectedDependencies);
+            Map<String, OpenRewriteAnalyzer.DepReport> detailedCandidates = OpenRewriteAnalyzer.findUnusedDetailed(module, protectedDependencies, settingsPath);
 
             // Filter candidates against our safety protections
             protectedDependencies.forEach(detailedCandidates::remove);
@@ -139,10 +147,10 @@ public class SpringPruneCli implements Callable<Integer> {
         allUnused.keySet().forEach(BuildVerifier::createBackup);
 
         out.println("💾 Applying safe exclusions via OpenRewrite...");
-        allUnused.forEach((path, candidates) -> OpenRewriteAnalyzer.applyExclusions(path, candidates.values(), comment));
+        allUnused.forEach((path, candidates) -> OpenRewriteAnalyzer.applyExclusions(path, candidates.values(), comment, settingsPath));
 
         out.println("🧪 Phase 4: Verifying Build Integrity...");
-        boolean buildSuccess = BuildVerifier.runTestCompile(projectPath, allUnused.keySet(), out, err);
+        boolean buildSuccess = BuildVerifier.runTestCompile(projectPath, allUnused.keySet(), out, err, settingsPath);
 
         if (buildSuccess) {
             out.println("\n🎉 Success! Project compiled cleanly. Deleting old footprint safely.");

@@ -64,7 +64,7 @@ public class ScopeHandlingTest {
         Files.createDirectories(javaDir);
         Files.writeString(javaDir.resolve("App.java"), "public class App {}");
 
-        Map<String, OpenRewriteAnalyzer.DepReport> result = OpenRewriteAnalyzer.findUnusedDetailed(tempDir, new HashSet<>());
+        Map<String, OpenRewriteAnalyzer.DepReport> result = OpenRewriteAnalyzer.findUnusedDetailed(tempDir, new HashSet<>(), null);
 
         // We expect commons-lang3 to be found (it is compile scope and unused)
         assertTrue(result.containsKey("org.apache.commons:commons-lang3"), "Should identify unused compile dependency");

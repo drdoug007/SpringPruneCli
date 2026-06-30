@@ -37,22 +37,22 @@ public class BuildVerifier {
      * @param err PrintWriter for logging errors.
      * @return true if the build compiled successfully, false otherwise.
      */
-    public static boolean runTestCompile(Path projectPath, java.util.Collection<Path> modifiedModules, java.io.PrintWriter out, java.io.PrintWriter err) {
+    public static boolean runTestCompile(Path projectPath, java.util.Collection<Path> modifiedModules, java.io.PrintWriter out, java.io.PrintWriter err, Path settingsPath) {
         if (Files.exists(projectPath.resolve("pom.xml"))) {
-            return executeMavenCompile(projectPath, projectPath, out, err);
+            return executeMavenCompile(projectPath, projectPath, out, err, settingsPath);
         }
 
         // If root has no pom.xml, verify each modified module individually
         out.println("ℹ️ No root pom.xml found. Verifying each modified module individually...");
         for (Path modulePath : modifiedModules) {
-            if (!executeMavenCompile(projectPath, modulePath, out, err)) {
+            if (!executeMavenCompile(projectPath, modulePath, out, err, settingsPath)) {
                 return false;
             }
         }
         return true;
     }
 
-    private static boolean executeMavenCompile(Path rootPath, Path executePath, java.io.PrintWriter out, java.io.PrintWriter err) {
+    private static boolean executeMavenCompile(Path rootPath, Path executePath, java.io.PrintWriter out, java.io.PrintWriter err, Path settingsPath) {
         out.println("🔨 Running 'mvn test-compile' in " + executePath.toAbsolutePath() + " to verify changes...");
 
         // Determine OS to invoke the correct Maven wrapper/executable
@@ -65,6 +65,9 @@ public class BuildVerifier {
             mavenCmd = isWindows ? ".\\mvnw.cmd" : "./mvnw";
         }
 
+        if (settingsPath != null && Files.exists(settingsPath)) {
+            return runMavenGoal(mavenCmd, executePath, out, err, "clean", "test-compile", "-s", settingsPath.toAbsolutePath().toString());
+        }
         return runMavenGoal(mavenCmd, executePath, out, err, "clean", "test-compile");
     }
 
