@@ -4,6 +4,7 @@ import one.dastec.springprune.analyzer.BuildVerifier;
 import one.dastec.springprune.analyzer.OpenRewriteAnalyzer;
 import one.dastec.springprune.analyzer.PomCommentScanner;
 import one.dastec.springprune.analyzer.SpringConfigScanner;
+import one.dastec.springprune.analyzer.SpringAnnotationScanner;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
@@ -32,6 +33,9 @@ public class SpringPruneCli implements Callable<Integer> {
     @Option(names = {"-d", "--dry-run"}, description = "Scan and print results without modifying pom.xml.")
     private boolean dryRun = false;
 
+    @Option(names = {"-c", "--comment"}, description = "Comment out unused dependencies instead of removing them.")
+    private boolean comment = false;
+
     @Spec
     private CommandSpec spec;
 
@@ -54,7 +58,7 @@ public class SpringPruneCli implements Callable<Integer> {
         out.println("🚀 Starting safe dependency analyzer on: " + projectPath.toAbsolutePath());
         out.println("📦 Found " + modules.size() + " module(s).");
 
-        Map<Path, Set<String>> allUnused = new HashMap<>();
+        Map<Path, Map<String, OpenRewriteAnalyzer.DepReport>> allUnused = new HashMap<>();
 
         for (Path module : modules) {
             out.println("\n--- Analyzing module: " + projectPath.relativize(module) + " ---");
@@ -66,20 +70,32 @@ public class SpringPruneCli implements Callable<Integer> {
             out.println("🔍 Phase 2: Scanning application properties for implicit framework intent...");
             Set<String> implicitKept = SpringConfigScanner.generateSafeList(module);
 
+            out.println("🔍 Phase 2.2: Scanning Java annotations for implicit framework intent...");
+            Set<String> annotationKept = SpringAnnotationScanner.scanAnnotations(module);
+
             Set<String> protectedDependencies = new HashSet<>();
             protectedDependencies.addAll(explicitKept);
             protectedDependencies.addAll(implicitKept);
+            protectedDependencies.addAll(annotationKept);
 
             // Phase 3: Run static code import parsing
-            out.println("🤖 Phase 3: Commencing OpenRewrite Static Import Analysis...");
-            Set<String> unusedCandidates = OpenRewriteAnalyzer.findUnused(module);
+            out.println("🤖 Phase 3: Commencing OpenRewrite Deep Tree Analysis...");
+            Map<String, OpenRewriteAnalyzer.DepReport> detailedCandidates = OpenRewriteAnalyzer.findUnusedDetailed(module, protectedDependencies);
 
             // Filter candidates against our safety protections
-            unusedCandidates.removeAll(protectedDependencies);
+            protectedDependencies.forEach(detailedCandidates::remove);
 
-            if (!unusedCandidates.isEmpty()) {
-                allUnused.put(module, unusedCandidates);
-                out.println("✂️ Found " + unusedCandidates.size() + " candidate(s) ready for removal.");
+            // Second pass: Filter out transitives whose direct parent is already being removed
+            Set<String> keysToRemove = detailedCandidates.values().stream()
+                    .filter(report -> !report.isDirect)
+                    .filter(report -> detailedCandidates.containsKey(report.introducedBy))
+                    .map(OpenRewriteAnalyzer.DepReport::getKey)
+                    .collect(Collectors.toSet());
+            keysToRemove.forEach(detailedCandidates::remove);
+
+            if (!detailedCandidates.isEmpty()) {
+                allUnused.put(module, detailedCandidates);
+                out.println("✂️ Found " + detailedCandidates.size() + " candidate(s) ready for removal.");
             } else {
                 out.println("🎉 Module is pristine! Zero unused dependencies found.");
             }
@@ -90,11 +106,28 @@ public class SpringPruneCli implements Callable<Integer> {
             return 0;
         }
 
-        out.println("\nSummary of candidates for removal:");
-        allUnused.forEach((path, deps) -> {
-            out.println("[" + projectPath.relativize(path) + "]");
-            deps.forEach(dep -> out.println("  • " + dep));
-        });
+        out.println("\n📋 SUMMARY OF CANDIDATES FOR REMOVAL");
+        for (Map.Entry<Path, Map<String, OpenRewriteAnalyzer.DepReport>> entry : allUnused.entrySet()) {
+            Path modulePath = entry.getKey();
+            Map<String, OpenRewriteAnalyzer.DepReport> moduleCandidates = entry.getValue();
+
+            out.println("\n[" + projectPath.relativize(modulePath) + "]");
+            out.println("==========================================================================================================");
+            out.printf("%-50s | %-12s | %-40s\n", "ARTIFACT COORDINATES", "TYPE", "ACTION / EXCLUSION SOURCE");
+            out.println("==========================================================================================================");
+
+            for (OpenRewriteAnalyzer.DepReport report : moduleCandidates.values()) {
+                String coords = report.groupId + ":" + report.artifactId;
+                if (report.isDirect) {
+                    String action = comment ? "💬 Comment out in <dependencies>" : "✂️ Remove completely from <dependencies>";
+                    out.printf("%-50s | %-12s | %-40s\n", coords, "DIRECT", action);
+                } else {
+                    String action = comment ? "💬 Commented exclusion inside: " : "🛑 Exclude inside: ";
+                    out.printf("%-50s | %-12s | %-40s\n", coords, "TRANSITIVE", action + report.introducedBy);
+                }
+            }
+            out.println("==========================================================================================================");
+        }
 
         if (dryRun) {
             out.println("\n[DRY RUN] Execution stopped. No files modified.");
@@ -106,7 +139,7 @@ public class SpringPruneCli implements Callable<Integer> {
         allUnused.keySet().forEach(BuildVerifier::createBackup);
 
         out.println("💾 Applying safe exclusions via OpenRewrite...");
-        allUnused.forEach(OpenRewriteAnalyzer::applyExclusions);
+        allUnused.forEach((path, candidates) -> OpenRewriteAnalyzer.applyExclusions(path, candidates.values(), comment));
 
         out.println("🧪 Phase 4: Verifying Build Integrity...");
         boolean buildSuccess = BuildVerifier.runTestCompile(projectPath, allUnused.keySet(), out, err);

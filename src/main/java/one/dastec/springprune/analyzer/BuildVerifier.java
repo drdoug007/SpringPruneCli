@@ -64,30 +64,39 @@ public class BuildVerifier {
             mavenCmd = isWindows ? ".\\mvnw.cmd" : "./mvnw";
         }
 
-        ProcessBuilder pb = new ProcessBuilder(mavenCmd, "clean", "test-compile");
+        return runMavenGoal(mavenCmd, executePath, out, err, "clean", "test-compile");
+    }
+
+    private static boolean runMavenGoal(String mavenCmd, Path executePath, String... goals) {
+        return runMavenGoal(mavenCmd, executePath, null, null, goals);
+    }
+
+    private static boolean runMavenGoal(String mavenCmd, Path executePath, java.io.PrintWriter out, java.io.PrintWriter err, String... goals) {
+        List<String> command = new ArrayList<>();
+        command.add(mavenCmd);
+        for (String goal : goals) {
+            command.add(goal);
+        }
+        
+        ProcessBuilder pb = new ProcessBuilder(command);
         pb.directory(executePath.toFile());
         pb.redirectErrorStream(true);
 
         try {
             Process process = pb.start();
-
-            // Stream the Maven output in the background to log failures if necessary
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    // Optional: Un-comment to see raw maven logs during debug
-                    // System.out.println("[MAVEN] " + line);
+                    // Optional logging
                 }
             }
-
-            int exitCode = process.waitFor();
-            return exitCode == 0;
-
+            return process.waitFor() == 0;
         } catch (IOException | InterruptedException e) {
-            err.println("❌ Error executing Maven verification: " + e.getMessage());
+            if (err != null) err.println("❌ Error executing Maven goals " + String.join(" ", goals) + ": " + e.getMessage());
             return false;
         }
     }
+
 
     /**
      * Restores all original pom.xml files from backups if verification fails.

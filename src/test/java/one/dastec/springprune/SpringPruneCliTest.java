@@ -12,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class SpringPruneCliTest {
@@ -138,7 +139,7 @@ public class SpringPruneCliTest {
         // Then it should succeed and find the unused dependency
         assertEquals(0, exitCode);
         String output = outWriter.toString();
-        assertTrue(output.contains("Summary of candidates for removal:"), "Output should list candidates");
+        assertTrue(output.contains("SUMMARY OF CANDIDATES FOR REMOVAL"), "Output should list candidates");
         assertTrue(output.contains("org.apache.commons:commons-lang3"), "Should identify commons-lang3 as unused");
     }
 
@@ -289,12 +290,9 @@ public class SpringPruneCliTest {
                 <?xml version="1.0" encoding="UTF-8"?>
                 <project xmlns="http://maven.apache.org/POM/4.0.0">
                     <modelVersion>4.0.0</modelVersion>
-                    <parent>
-                        <groupId>com.test</groupId>
-                        <artifactId>parent</artifactId>
-                        <version>1.0</version>
-                    </parent>
+                    <groupId>com.test</groupId>
                     <artifactId>child1</artifactId>
+                    <version>1.0</version>
                     <dependencies>
                         <dependency>
                             <groupId>org.apache.commons</groupId>
@@ -388,5 +386,469 @@ public class SpringPruneCliTest {
         String output = outWriter.toString();
         assertTrue(output.contains("No root pom.xml found. Verifying each modified module individually"), "Should use individual module verification");
         assertTrue(output.contains("Success! Project compiled cleanly"), "Should succeed verification");
+    }
+
+    @Test
+    void test_shouldSuppressTransitiveReportWhenParentIsRemoved(@TempDir Path tempProjectDir) throws IOException {
+        // Given a project with a dependency that pulls in a transitive one
+        Path pomPath = tempProjectDir.resolve("pom.xml");
+        String pomContent = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>test-app</artifactId>
+                    <version>1.0</version>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.openrewrite</groupId>
+                            <artifactId>rewrite-maven</artifactId>
+                            <version>8.12.0</version>
+                        </dependency>
+                    </dependencies>
+                </project>
+                """;
+        Files.writeString(pomPath, pomContent);
+
+        Path javaDir = tempProjectDir.resolve("src").resolve("main").resolve("java");
+        Files.createDirectories(javaDir);
+        Files.writeString(javaDir.resolve("App.java"), "public class App {}");
+
+        String[] args = {"--path", tempProjectDir.toAbsolutePath().toString(), "--dry-run"};
+        int exitCode = cmd.execute(args);
+
+        assertEquals(0, exitCode);
+        String output = outWriter.toString();
+        
+        // Should identify rewrite-maven as DIRECT
+        assertTrue(output.contains("org.openrewrite:rewrite-maven"), "Should identify rewrite-maven");
+        assertTrue(output.contains("DIRECT"), "Should identify rewrite-maven as DIRECT");
+        
+        // Should NOT identify rewrite-core because rewrite-maven is being removed
+        assertFalse(output.contains("org.openrewrite:rewrite-core"), "Should suppress rewrite-core because its parent rewrite-maven is being removed");
+    }
+
+    @Test
+    void test_shouldApplyTransitiveExclusion(@TempDir Path tempProjectDir) throws IOException {
+        // Given a project with a direct dependency and a transitive dependency
+        Path pomPath = tempProjectDir.resolve("pom.xml");
+        String pomContent = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>test-app</artifactId>
+                    <version>1.0</version>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.openrewrite</groupId>
+                            <artifactId>rewrite-maven</artifactId>
+                            <version>8.12.0</version>
+                        </dependency>
+                    </dependencies>
+                </project>
+                """;
+        Files.writeString(pomPath, pomContent);
+
+        // We'll simulate the report that findUnusedDetailed would produce
+        one.dastec.springprune.analyzer.OpenRewriteAnalyzer.DepReport transitiveReport = 
+            new one.dastec.springprune.analyzer.OpenRewriteAnalyzer.DepReport(
+                "org.openrewrite", "rewrite-core", false, "org.openrewrite:rewrite-maven"
+        );
+
+        // When applying exclusions
+        one.dastec.springprune.analyzer.OpenRewriteAnalyzer.applyExclusions(tempProjectDir, java.util.Collections.singleton(transitiveReport), false);
+
+        // Then the pom.xml should contain an <exclusion>
+        String updatedPom = Files.readString(pomPath);
+        assertTrue(updatedPom.contains("<exclusion>"), "POM should contain an exclusion tag");
+        assertTrue(updatedPom.contains("<artifactId>rewrite-core</artifactId>"), "Should exclude rewrite-core");
+    }
+
+
+    @Test
+    void test_shouldProtectCommonRuntimeEssentials(@TempDir Path tempProjectDir) throws IOException {
+        // Given a project with spring-jcl (logging bridge)
+        Path pomPath = tempProjectDir.resolve("pom.xml");
+        String pomContent = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>test-app</artifactId>
+                    <version>1.0</version>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.springframework</groupId>
+                            <artifactId>spring-jcl</artifactId>
+                            <version>6.0.0</version>
+                        </dependency>
+                    </dependencies>
+                </project>
+                """;
+        Files.writeString(pomPath, pomContent);
+
+        // No code uses it
+        Path javaDir = tempProjectDir.resolve("src/main/java");
+        Files.createDirectories(javaDir);
+        Files.writeString(javaDir.resolve("App.java"), "public class App {}");
+
+        // When running in dry-run mode
+        String[] args = {"--path", tempProjectDir.toAbsolutePath().toString(), "--dry-run"};
+        int exitCode = cmd.execute(args);
+
+        // Then it should NOT find spring-jcl as unused
+        assertEquals(0, exitCode);
+        String output = outWriter.toString();
+        assertTrue(output.contains("Zero unused dependencies found"), "Should protect spring-jcl as common runtime essential");
+    }
+
+    @Test
+    void test_shouldProtectTomcatEmbeddedServer(@TempDir Path tempProjectDir) throws IOException {
+        // Given a project with tomcat-embed-core
+        Path pomPath = tempProjectDir.resolve("pom.xml");
+        String pomContent = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>test-app</artifactId>
+                    <version>1.0</version>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.apache.tomcat.embed</groupId>
+                            <artifactId>tomcat-embed-core</artifactId>
+                            <version>10.1.19</version>
+                        </dependency>
+                    </dependencies>
+                </project>
+                """;
+        Files.writeString(pomPath, pomContent);
+
+        // No code uses it
+        Path javaDir = tempProjectDir.resolve("src/main/java");
+        Files.createDirectories(javaDir);
+        Files.writeString(javaDir.resolve("App.java"), "public class App {}");
+
+        // When running in dry-run mode
+        String[] args = {"--path", tempProjectDir.toAbsolutePath().toString(), "--dry-run"};
+        int exitCode = cmd.execute(args);
+
+        // Then it should NOT find tomcat-embed-core as unused
+        assertEquals(0, exitCode);
+        String output = outWriter.toString();
+        assertTrue(output.contains("Zero unused dependencies found"), "Should protect tomcat-embed-core as common runtime essential");
+    }
+
+    @Test
+    void test_shouldProtectJacksonWhenRestControllerIsPresent(@TempDir Path tempProjectDir) throws IOException {
+        // Given a project with jackson-databind
+        Path pomPath = tempProjectDir.resolve("pom.xml");
+        String pomContent = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>test-app</artifactId>
+                    <version>1.0</version>
+                    <dependencies>
+                        <dependency>
+                            <groupId>com.fasterxml.jackson.core</groupId>
+                            <artifactId>jackson-databind</artifactId>
+                            <version>2.15.2</version>
+                        </dependency>
+                    </dependencies>
+                </project>
+                """;
+        Files.writeString(pomPath, pomContent);
+
+        // Java code uses @RestController but does NOT import anything from Jackson
+        Path javaDir = tempProjectDir.resolve("src/main/java");
+        Files.createDirectories(javaDir);
+        Files.writeString(javaDir.resolve("MyController.java"), """
+                package com.test;
+                import org.springframework.web.bind.annotation.RestController;
+                
+                @RestController
+                public class MyController {
+                    public String hello() { return "world"; }
+                }
+                """);
+
+        // When running in dry-run mode
+        String[] args = {"--path", tempProjectDir.toAbsolutePath().toString(), "--dry-run"};
+        int exitCode = cmd.execute(args);
+
+        // Then it should NOT find jackson-databind as unused
+        assertEquals(0, exitCode);
+        String output = outWriter.toString();
+        assertTrue(output.contains("Zero unused dependencies found"), "Should protect jackson-databind via @RestController");
+    }
+
+    @Test
+    void test_shouldProtectJpaAndLombokAnnotations(@TempDir Path tempProjectDir) throws IOException {
+        // Given a project with hibernate-core and lombok
+        Path pomPath = tempProjectDir.resolve("pom.xml");
+        String pomContent = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>test-app</artifactId>
+                    <version>1.0</version>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.hibernate.orm</groupId>
+                            <artifactId>hibernate-core</artifactId>
+                            <version>6.2.7.Final</version>
+                        </dependency>
+                        <dependency>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>1.18.28</version>
+                        </dependency>
+                    </dependencies>
+                </project>
+                """;
+        Files.writeString(pomPath, pomContent);
+
+        // Java code uses @Entity and @Data
+        Path javaDir = tempProjectDir.resolve("src/main/java");
+        Files.createDirectories(javaDir);
+        Files.writeString(javaDir.resolve("User.java"), """
+                package com.test;
+                import jakarta.persistence.Entity;
+                import lombok.Data;
+                
+                @Entity
+                @Data
+                public class User {
+                    private Long id;
+                }
+                """);
+
+        // When running in dry-run mode
+        String[] args = {"--path", tempProjectDir.toAbsolutePath().toString(), "--dry-run"};
+        int exitCode = cmd.execute(args);
+
+        // Then it should NOT find hibernate-core or lombok as unused
+        assertEquals(0, exitCode);
+        String output = outWriter.toString();
+        assertTrue(output.contains("Zero unused dependencies found"), "Should protect JPA and Lombok via annotations");
+    }
+    @Test
+    void test_shouldIdentifyUnusedSpringAiDependency(@TempDir Path tempProjectDir) throws IOException {
+        // Given a project with an unused Spring AI dependency
+        Path pomPath = tempProjectDir.resolve("pom.xml");
+        String pomContent = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>test-app</artifactId>
+                    <version>1.0</version>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.springframework.ai</groupId>
+                            <artifactId>spring-ai-autoconfigure-model-ollama</artifactId>
+                            <version>1.0.0</version>
+                        </dependency>
+                        <dependency>
+                            <groupId>org.springframework.boot</groupId>
+                            <artifactId>spring-boot-starter</artifactId>
+                            <version>3.2.5</version>
+                        </dependency>
+                    </dependencies>
+                </project>
+                """;
+        Files.writeString(pomPath, pomContent);
+
+        // Code uses Spring Boot but NOT Spring AI
+        Path javaDir = tempProjectDir.resolve("src/main/java");
+        Files.createDirectories(javaDir);
+        Files.writeString(javaDir.resolve("App.java"), """
+                import org.springframework.boot.SpringApplication;
+                import org.springframework.boot.autoconfigure.SpringBootApplication;
+                
+                @SpringBootApplication
+                public class App {
+                    public static void main(String[] args) {
+                        SpringApplication.run(App.class, args);
+                    }
+                }
+                """);
+
+        // When running in dry-run mode
+        String[] args = {"--path", tempProjectDir.toAbsolutePath().toString(), "--dry-run"};
+        int exitCode = cmd.execute(args);
+
+        // Then it should identify spring-ai-autoconfigure-model-ollama as unused
+        assertEquals(0, exitCode);
+        String output = outWriter.toString();
+        assertTrue(output.contains("org.springframework.ai:spring-ai-autoconfigure-model-ollama"), 
+            "Should identify unused Spring AI dependency");
+    }
+    @Test
+    void test_shouldCorrectlyIdentifyGuavaAsUsedViaMismatchedPackage(@TempDir Path tempProjectDir) throws IOException {
+        // Given a project with Guava (groupId com.google.guava, package com.google.common)
+        Path pomPath = tempProjectDir.resolve("pom.xml");
+        String pomContent = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>test-app</artifactId>
+                    <version>1.0</version>
+                    <dependencies>
+                        <dependency>
+                            <groupId>com.google.guava</groupId>
+                            <artifactId>guava</artifactId>
+                            <version>31.1-jre</version>
+                        </dependency>
+                    </dependencies>
+                </project>
+                """;
+        Files.writeString(pomPath, pomContent);
+
+        // Code uses com.google.common.Lists which is in guava artifact
+        Path javaDir = tempProjectDir.resolve("src/main/java");
+        Files.createDirectories(javaDir);
+        Files.writeString(javaDir.resolve("App.java"), """
+                import com.google.common.collect.Lists;
+                import java.util.List;
+                
+                public class App {
+                    public void test() {
+                        List<String> list = Lists.newArrayList("a", "b");
+                    }
+                }
+                """);
+
+        // When running in dry-run mode
+        String[] args = {"--path", tempProjectDir.toAbsolutePath().toString(), "--dry-run"};
+        int exitCode = cmd.execute(args);
+
+        // Then it should NOT find guava as unused because of the 2-part fallback (com.google)
+        assertEquals(0, exitCode);
+        String output = outWriter.toString();
+        assertTrue(output.contains("Zero unused dependencies found"), "Should protect Guava via com.google fallback");
+    }
+
+    @Test
+    void test_shouldCommentOutUnusedDependency(@TempDir Path tempProjectDir) throws IOException {
+        // Given a project with an unused dependency
+        Path pomPath = tempProjectDir.resolve("pom.xml");
+        String pomContent = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>test-app</artifactId>
+                    <version>1.0</version>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.apache.commons</groupId>
+                            <artifactId>commons-lang3</artifactId>
+                            <version>3.12.0</version>
+                        </dependency>
+                    </dependencies>
+                </project>
+                """;
+        Files.writeString(pomPath, pomContent);
+
+        one.dastec.springprune.analyzer.OpenRewriteAnalyzer.DepReport report = 
+            new one.dastec.springprune.analyzer.OpenRewriteAnalyzer.DepReport(
+                "org.apache.commons", "commons-lang3", true, "Directly declared in pom.xml"
+        );
+
+        // When applying exclusions with commentOnly = true
+        one.dastec.springprune.analyzer.OpenRewriteAnalyzer.applyExclusions(tempProjectDir, java.util.Collections.singleton(report), true);
+
+        // Then the dependency should be commented out in the POM
+        String updatedPom = Files.readString(pomPath);
+        assertTrue(updatedPom.contains("<!--"), "Should contain XML comment start");
+        assertTrue(updatedPom.contains("-->"), "Should contain XML comment end");
+        assertTrue(updatedPom.contains("<artifactId>commons-lang3</artifactId>"), "Should still contain the artifactId inside the comment");
+    }
+
+    @Test
+    void test_shouldAddCommentedExclusion(@TempDir Path tempProjectDir) throws IOException {
+        // Given a project with a dependency that pulls in transitive
+        Path pomPath = tempProjectDir.resolve("pom.xml");
+        String pomContent = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>test-app</artifactId>
+                    <version>1.0</version>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.openrewrite</groupId>
+                            <artifactId>rewrite-maven</artifactId>
+                            <version>8.12.0</version>
+                        </dependency>
+                    </dependencies>
+                </project>
+                """;
+        Files.writeString(pomPath, pomContent);
+
+        one.dastec.springprune.analyzer.OpenRewriteAnalyzer.DepReport transitiveReport = 
+            new one.dastec.springprune.analyzer.OpenRewriteAnalyzer.DepReport(
+                "org.openrewrite", "rewrite-core", false, "org.openrewrite:rewrite-maven"
+        );
+
+        // When applying exclusions with commentOnly = true
+        one.dastec.springprune.analyzer.OpenRewriteAnalyzer.applyExclusions(tempProjectDir, java.util.Collections.singleton(transitiveReport), true);
+
+        // Then the exclusion should be added but commented out
+        String updatedPom = Files.readString(pomPath);
+        assertTrue(updatedPom.contains("<!--"), "Should contain XML comment start");
+        assertTrue(updatedPom.contains("<exclusion>"), "Should contain exclusion tag");
+        assertTrue(updatedPom.contains("</exclusion>"), "Should contain exclusion closing tag");
+        
+        int commentStart = updatedPom.indexOf("<!--");
+        int exclusionStart = updatedPom.indexOf("<exclusion>");
+        int exclusionEnd = updatedPom.indexOf("</exclusion>");
+        int commentEnd = updatedPom.indexOf("-->");
+        
+        assertTrue(commentStart < exclusionStart, "Comment should start before exclusion");
+        assertTrue(exclusionEnd < commentEnd, "Comment should end after exclusion");
+    }
+
+    @Test
+    void test_shouldShowCommentActionsInSummary(@TempDir Path tempProjectDir) throws IOException {
+        // Given a project with an unused dependency
+        Path pomPath = tempProjectDir.resolve("pom.xml");
+        String pomContent = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>test-app</artifactId>
+                    <version>1.0</version>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.apache.commons</groupId>
+                            <artifactId>commons-lang3</artifactId>
+                            <version>3.12.0</version>
+                        </dependency>
+                    </dependencies>
+                </project>
+                """;
+        Files.writeString(pomPath, pomContent);
+
+        // Code uses NOTHING
+        Path javaDir = tempProjectDir.resolve("src/main/java");
+        Files.createDirectories(javaDir);
+        Files.writeString(javaDir.resolve("App.java"), "public class App {}");
+
+        // When running with --comment and --dry-run
+        String[] args = {"--path", tempProjectDir.toAbsolutePath().toString(), "--comment", "--dry-run"};
+        cmd.execute(args);
+
+        // Then it should show "Comment out" in the output
+        String output = outWriter.toString();
+        assertTrue(output.contains("💬 Comment out in <dependencies>"), "Should show comment action for direct dependency");
     }
 }
